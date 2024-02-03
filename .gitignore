@@ -1,0 +1,11 @@
+/db
+/db.index
+/example/db
+/example/db.index
+
+# Compiled source #
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
