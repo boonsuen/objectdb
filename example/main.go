@@ -8,9 +8,14 @@ import (
 	"github.com/boonsuen/objectdb"
 )
 
+type Address struct {
+	Postcode string `json:"postcode"`
+}
+
 type Restaurant struct {
-	Name    string `json:"name"`
-	Cuisine string `json:"cuisine"`
+	Name    string  `json:"name"`
+	Cuisine string  `json:"cuisine"`
+	Address Address `json:"address"`
 }
 
 type Employee struct {
@@ -34,10 +39,12 @@ func main() {
 	}
 
 	newRestaurants := []Restaurant{
-		{"Rule of Thirds", "Japanese"},
-		{"Xi'an Famous Foods", "Chinese"},
-		{"Joe's Shanghai", "Chinese"},
-		{"Shanghai Asian Manor", "Chinese"},
+		{"Rule of Thirds", "Japanese", Address{"80000"}},
+		{"Xi'an Famous Foods", "Chinese", Address{"10000"}},
+		{"Joe's Shanghai", "Chinese", Address{"20000"}},
+		{"Shanghai Asian Manor", "Chinese", Address{"80000"}},
+		{"Good Bread", "Chinese", Address{"10000"}},
+		{"Shanghai Cuisine", "Chinese", Address{"10000"}},
 	}
 
 	newEmployees := []interface{}{
@@ -106,7 +113,7 @@ func main() {
 	}
 
 	// Print all the restaurants
-	fmt.Println("All restaurants:")
+	fmt.Println("\nAll restaurants:")
 	for index, doc := range restaurants {
 		restaurant := Restaurant{}
 		err := objectdb.Unmarshal(doc, &restaurant)
@@ -119,7 +126,7 @@ func main() {
 	}
 
 	// Print all the employees
-	fmt.Println("All employees:")
+	fmt.Println("\nAll employees:")
 	for index, doc := range employees {
 		employee := Employee{}
 		err := objectdb.Unmarshal(doc, &employee)
@@ -131,15 +138,21 @@ func main() {
 		fmt.Printf("%d: %+v\n", index, employee)
 	}
 
-	// Find 2 chinese restaurants
-	chineseRestaurants, err := db.FindMany("restaurants", map[string]interface{}{"cuisine": "Chinese"}, objectdb.Options{Limit: 2})
+	// Find 2 chinese restaurants in the postcode of 10000
+	chineseRestaurants, err := db.FindMany("restaurants", map[string]interface{}{
+		"cuisine": "Chinese",
+		"address": map[string]interface{}{
+			"postcode": "10000",
+		},
+	}, objectdb.Options{Limit: 2})
+
 	if err != nil {
 		log.Fatalf("error finding chinese restaurants: %v", err)
 		return
 	}
 
 	// Print the chinese restaurants
-	fmt.Println("Chinese restaurants:")
+	fmt.Println("\nChinese restaurants:")
 	for index, doc := range chineseRestaurants {
 		restaurant := Restaurant{}
 		err := objectdb.Unmarshal(doc, &restaurant)
