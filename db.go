@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/cockroachdb/pebble"
@@ -27,6 +28,84 @@ type Options struct {
 	Limit int
 }
 
+// Example of a query:
+// Top-level implicitly ANDs all the conditions
+// query = [
+// 	{
+// 		"Operator": "AND",
+// 		"Operands": [
+// 			{
+// 				"Field": "name",
+// 				"Operator": "=",
+// 				"Value": "Shaun Persad"
+// 			},
+// 			{
+// 				"Field": "age",
+// 				"Operator": ">=",
+// 				"Value": 27
+// 			}
+// 		]
+// 	},
+// 	{
+// 		"Operator": "OR",
+// 		"Operands": [
+// 			{
+// 				"Field": "address.city",
+// 				"Operator": "=",
+// 				"Value": "New York"
+// 			},
+// 			{
+// 				"Field": "address.postcode",
+// 				"Operator": "=",
+// 				"Value": "10000"
+// 			}
+// 		]
+// 	}
+// ]
+
+// The above query is equivalent to the following SQL where clause:
+// (top-level implicitly ANDs all the conditions)
+// (name = "Shaun Persad" AND age >= 27) AND (address.city = "New York" OR address.postcode = "10000")
+// - nested conditions are currently not supported
+// - nested field is denoted by a dot (.) (e.g. address.city) in the path
+
+// The query of a single condition is equivalent to the following query:
+// {
+// 	"Operator": "AND",
+// 	"Operands": [
+// 		{
+// 			"Field": "name",
+// 			"Operator": "=",
+// 			"Value": "Shaun Persad"
+// 		}
+// 	]
+// }
+
+// The query of a single condition is equivalent to the following SQL where clause:
+// name = "Shaun Persad"
+
+type Condition struct {
+	Path     string
+	Operator string
+	Value    interface{}
+}
+
+type Query []struct {
+	Operator string // AND or OR
+	Operands []Condition
+}
+
+// Comparison operators
+const (
+	EQ  = "="
+	NE  = "!="
+	GT  = ">"
+	GTE = ">="
+	LT  = "<"
+	LTE = "<="
+)
+
+// Open opens the underlying storage engine
 func Open(path string) (*DB, error) {
 	db := DB{store: nil, index: nil}
 	var err error
@@ -149,8 +228,8 @@ func (db *DB) FindOneById(collectionName, id string) (Document, error) {
 	return document, nil
 }
 
-func (db *DB) FindOne(collectionName string, filter Document) (Document, error) {
-	documents, err := db.FindMany(collectionName, filter, Options{Limit: 1})
+func (db *DB) FindOne(collectionName string, query Query) (Document, error) {
+	documents, err := db.FindMany(collectionName, query, Options{Limit: 1})
 
 	if len(documents) == 0 {
 		return nil, ErrNoDocuments
@@ -159,98 +238,186 @@ func (db *DB) FindOne(collectionName string, filter Document) (Document, error) 
 	return documents[0], err
 }
 
-func (db *DB) FindMany(collectionName string, filter Document, options Options) ([]Document, error) {
+func (db *DB) FindMany(collectionName string, query Query, options Options) ([]Document, error) {
 	var documents []Document
 
-	iter := db.store.NewIter(nil)
-	defer iter.Close()
+	// For AND condition, if it contains at least one EQ condition, we can use the index
+	// to check. If it contains only non-EQ conditions, fallback to scanning the entire collection.
 
-	// Check the index for the filter
-	pathValues := getPathValues(filter, "")
+	// For OR condition, if it contains all EQ conditions, we can use the index to check.
+	// If it contains at least one non-EQ condition, fallback to scanning the entire collection.
 
-	allMatchedIdsFromIndex := []string{}
+	// Note that the query is not nested, and the top-level implicitly ANDs all the conditions.
 
-	// Each path value is ANDed
-	for _, pathValue := range pathValues {
-		// Build the index key
-		indexKey := collectionName + ":" + pathValue
+	fallbackToFullScan := false
 
-		idsString, closer, err := db.index.Get([]byte(indexKey))
-		if err != nil && err != pebble.ErrNotFound {
-			return nil, err
-		}
-
-		if closer != nil {
-			defer closer.Close()
-		}
-
-		if len(idsString) == 0 {
-			// If any of the path values do not exist in the index, then there are
-			// no documents that match the filter but break to fallback to rescan
-			// the entire collection due to potential missing index
-			break
-		}
-
-		ids := strings.Split(string(idsString), ",")
-
-		if len(allMatchedIdsFromIndex) == 0 {
-			allMatchedIdsFromIndex = ids
-		} else {
-			// Find the intersection of the ids
-			intersection := []string{}
-			for _, id := range ids {
-				for _, existingId := range allMatchedIdsFromIndex {
-					if id == existingId {
-						intersection = append(intersection, id)
+	// Check if query is not empty and not nil
+	// Empty or nil query means full scan
+	if len(query) > 0 && query != nil {
+		// Top-level implicitly ANDs all the conditions
+		for _, topOperand := range query {
+			// If the top-level condition is OR, fallback to full scan if it contains at least one non-EQ condition
+			if topOperand.Operator == "OR" {
+				for _, operand := range topOperand.Operands {
+					if operand.Operator != EQ {
+						fallbackToFullScan = true
+						break
 					}
 				}
 			}
-			allMatchedIdsFromIndex = intersection
 
-			// If there are no more ids, break
-			// because the intersection will always be empty
-			if len(allMatchedIdsFromIndex) == 0 {
+			// If the top-level condition is AND, check if it contains only non-EQ conditions
+			foundEQ := false
+			for _, operand := range topOperand.Operands {
+				if operand.Operator == EQ {
+					foundEQ = true
+					break
+				}
+			}
+
+			if !foundEQ {
+				fallbackToFullScan = true
 				break
 			}
 		}
+	} else {
+		fallbackToFullScan = true
 	}
 
-	if len(allMatchedIdsFromIndex) > 0 {
-		for _, id := range allMatchedIdsFromIndex {
-			document, err := db.FindOneById(collectionName, id)
-			if err != nil && err != ErrDocumentNotExists {
+	// (... AND ...) AND (... OR ...)
+	// Since top-level are ANDed, we can use the technique of counting how many
+	// conditions are EQ. For example, there are 3 AND conditions above.
+	// ((... OR ...) is one AND condition) and there are 2 out of 3 EQ conditions.
+	// If the id appears in the index for all 3 AND conditions, then it is a match.
+
+	if !fallbackToFullScan {
+		// Use the index to check
+		fmt.Println("INDEX, NO FULL SCAN")
+
+		allMatchedIdsFromIndex := []string{}
+
+		idsConditionCount := map[string]int{}
+		nonRangeConditionCount := 0
+
+		for _, topOperand := range query {
+			if topOperand.Operator == "OR" {
+				// Here, all the OR-ed conditions are EQ conditions, and because
+				// it is considered as "one of the AND conditions" in the top-level perspective,
+				// we add 1 to the nonRangeConditionCount regardless of the number of conditions in the OR.
+
+				nonRangeConditionCount++
+
+				matchedIdsInOr := map[string]bool{}
+
+				for _, operand := range topOperand.Operands {
+					// Build the index key
+					indexKey := getIndexKey(collectionName, buildPathValue(operand.Path, fmt.Sprintf("%v", operand.Value)))
+
+					idsString, closer, err := db.index.Get([]byte(indexKey))
+					if err != nil && err != pebble.ErrNotFound {
+						return nil, err
+					}
+
+					if closer != nil {
+						defer closer.Close()
+					}
+
+					ids := strings.Split(string(idsString), ",")
+
+					for _, id := range ids {
+						matchedIdsInOr[id] = true
+					}
+				}
+
+				// Put the matched IDs in the OR condition into the idsConditionCount
+				for id := range matchedIdsInOr {
+					_, ok := idsConditionCount[id]
+					if !ok {
+						idsConditionCount[id] = 0
+					}
+					idsConditionCount[id]++
+				}
+			} else {
+				// Here, at least one of the ANDs is an EQ condition
+				for _, operand := range topOperand.Operands {
+					if operand.Operator == EQ {
+						nonRangeConditionCount++
+
+						// Build the index key
+						indexKey := getIndexKey(collectionName, buildPathValue(operand.Path, fmt.Sprintf("%v", operand.Value)))
+
+						idsString, closer, err := db.index.Get([]byte(indexKey))
+
+						if err != nil && err != pebble.ErrNotFound {
+							return nil, err
+						}
+
+						if closer != nil {
+							defer closer.Close()
+						}
+
+						ids := strings.Split(string(idsString), ",")
+
+						for _, id := range ids {
+							_, ok := idsConditionCount[id]
+							if !ok {
+								idsConditionCount[id] = 0
+							}
+							idsConditionCount[id]++
+						}
+					}
+				}
+			}
+		}
+
+		for id, count := range idsConditionCount {
+			if count == nonRangeConditionCount {
+				allMatchedIdsFromIndex = append(allMatchedIdsFromIndex, id)
+			}
+		}
+
+		if len(allMatchedIdsFromIndex) > 0 {
+			for _, id := range allMatchedIdsFromIndex {
+				document, err := db.FindOneById(collectionName, id)
+				if err != nil && err != ErrDocumentNotExists {
+					return nil, err
+				}
+
+				// Since the allMatchedIdsFromIndex are those that match the EQ conditions only,
+				// we need to check if the document matches the other conditions as well.
+				if matchQuery(document, query) {
+					documents = append(documents, document)
+
+					// Limit = 0 means no limit
+					if options.Limit > 0 && len(documents) >= options.Limit {
+						break
+					}
+				}
+			}
+		}
+	} else {
+		// Fallback to scanning the entire collection
+		iter := db.store.NewIter(nil)
+		defer iter.Close()
+
+		for iter.First(); iter.Valid(); iter.Next() {
+			var document Document
+			if err := json.Unmarshal(iter.Value(), &document); err != nil {
 				return nil, err
 			}
 
-			documents = append(documents, document)
-
-			// Limit = 0 means no limit
-			if options.Limit > 0 && len(documents) >= options.Limit {
-				break
+			// Check the collection name
+			if strings.Split(string(iter.Key()), ":")[0] != collectionName {
+				continue
 			}
-		}
 
-		return documents, nil
-	}
+			if matchQuery(document, query) {
+				documents = append(documents, document)
 
-	// Fallback to scanning the entire collection if the index does not exist
-	for iter.First(); iter.Valid(); iter.Next() {
-		var document Document
-		if err := json.Unmarshal(iter.Value(), &document); err != nil {
-			return nil, err
-		}
-
-		// Check the collection name
-		if strings.Split(string(iter.Key()), ":")[0] != collectionName {
-			continue
-		}
-
-		if matchQuery(document, filter) {
-			documents = append(documents, document)
-
-			// Limit = 0 means no limit
-			if options.Limit > 0 && len(documents) >= options.Limit {
-				break
+				// Limit = 0 means no limit
+				if options.Limit > 0 && len(documents) >= options.Limit {
+					break
+				}
 			}
 		}
 	}
@@ -262,14 +429,106 @@ func getDocumentKey(collectionName, id string) []byte {
 	return []byte(collectionName + ":" + id)
 }
 
+func getIndexKey(collectionName, pathValue string) []byte {
+	return []byte(collectionName + ":" + pathValue)
+}
+
 // matchQuery checks if a document matches a query.
-func matchQuery(doc, query Document) bool {
-	for key, value := range query {
-		if docValue, ok := doc[key]; !ok || fmt.Sprintf("%v", docValue) != fmt.Sprintf("%v", value) {
-			return false
+func matchQuery(document Document, query Query) bool {
+	// Top-level implicitly ANDs all the conditions
+	for _, topOperand := range query {
+		// OR condition
+		if topOperand.Operator == "OR" {
+			foundMatch := false
+			for _, operand := range topOperand.Operands {
+				if matchCondition(document, operand) {
+					foundMatch = true
+					break
+				}
+			}
+
+			if !foundMatch {
+				return false
+			}
+		} else {
+			// AND condition
+			for _, operand := range topOperand.Operands {
+				if !matchCondition(document, operand) {
+					return false
+				}
+			}
 		}
 	}
+
 	return true
+}
+
+// matchCondition checks if a document matches a condition.
+func matchCondition(document Document, condition Condition) bool {
+	value, ok := document[condition.Path]
+	if !ok {
+		return false
+	}
+
+	if condition.Operator == EQ {
+		return fmt.Sprintf("%v", value) == fmt.Sprintf("%v", condition.Value)
+	} else if condition.Operator == NE {
+		return fmt.Sprintf("%v", value) != fmt.Sprintf("%v", condition.Value)
+	}
+
+	// Handle >, >=, <, <=
+	right, err := strconv.ParseFloat(fmt.Sprintf("%v", condition.Value), 64)
+	if err != nil {
+		return false
+	}
+
+	var left float64
+	switch v := value.(type) {
+	case float64:
+		left = v
+	case float32:
+		left = float64(v)
+	case uint:
+		left = float64(v)
+	case uint8:
+		left = float64(v)
+	case uint16:
+		left = float64(v)
+	case uint32:
+		left = float64(v)
+	case uint64:
+		left = float64(v)
+	case int:
+		left = float64(v)
+	case int8:
+		left = float64(v)
+	case int16:
+		left = float64(v)
+	case int32:
+		left = float64(v)
+	case int64:
+		left = float64(v)
+	case string:
+		left, err = strconv.ParseFloat(v, 64)
+		if err != nil {
+			return false
+		}
+	default:
+		return false
+	}
+
+	switch condition.Operator {
+	case GT:
+		return left > right
+	case GTE:
+		return left >= right
+	case LT:
+		return left < right
+	case LTE:
+		return left <= right
+	}
+
+	return false
 }
 
 // Unmarshal a document into a struct
@@ -316,7 +575,7 @@ func (db *DB) deleteDocumentFromIndex(collectionName, id string, document Docume
 
 	for _, pathValue := range pv {
 		// Build the index key
-		indexKey := collectionName + ":" + pathValue
+		indexKey := getIndexKey(collectionName, pathValue)
 
 		// Get the current value of the index
 		idsString, closer, err := db.index.Get([]byte(indexKey))
@@ -381,7 +640,7 @@ func (db *DB) indexDocument(collectionName, id string, document Document) error 
 
 	for _, pathValue := range pv {
 		// Build the index key
-		indexKey := collectionName + ":" + pathValue
+		indexKey := getIndexKey(collectionName, pathValue)
 
 		// Get the current value of the index
 		idsString, closer, err := db.index.Get([]byte(indexKey))
@@ -437,11 +696,15 @@ func getPathValues(document Document, prefix string) []string {
 		case Document:
 			pvs = append(pvs, getPathValues(v, key)...)
 		default:
-			pvs = append(pvs, fmt.Sprintf("%s=%v", key, v))
+			pvs = append(pvs, buildPathValue(key, v))
 		}
 	}
 
 	return pvs
+}
+
+func buildPathValue(path string, value interface{}) string {
+	return fmt.Sprintf("%s=%v", path, value)
 }
 
 // Clear all documents in the store

@@ -49,6 +49,7 @@ func main() {
 
 	newEmployees := []interface{}{
 		Employee{"John", "25"},
+		Employee{"John", "20"},
 		Employee{"Jane", "30"},
 		Employee{"Doe", "35"},
 	}
@@ -99,14 +100,14 @@ func main() {
 	}
 
 	// Find all restaurants in the collection
-	restaurants, err := db.FindMany("restaurants", map[string]interface{}{}, objectdb.Options{})
+	restaurants, err := db.FindMany("restaurants", nil, objectdb.Options{})
 	if err != nil {
 		log.Fatalf("error finding restaurants: %v", err)
 		return
 	}
 
 	// Find all employees in the collection
-	employees, err := db.FindMany("employees", map[string]interface{}{}, objectdb.Options{})
+	employees, err := db.FindMany("employees", objectdb.Query{}, objectdb.Options{})
 	if err != nil {
 		log.Fatalf("error finding employees: %v", err)
 		return
@@ -139,12 +140,14 @@ func main() {
 	}
 
 	// Find 2 chinese restaurants in the postcode of 10000
-	chineseRestaurants, err := db.FindMany("restaurants", map[string]interface{}{
-		"cuisine": "Chinese",
-		"address": map[string]interface{}{
-			"postcode": "10000",
-		},
-	}, objectdb.Options{Limit: 2})
+	resQuery := objectdb.Query{
+		{"AND", []objectdb.Condition{
+			{Path: "cuisine", Operator: "=", Value: "Chinese"},
+			{Path: "address.postcode", Operator: "=", Value: "10000"},
+		}},
+	}
+
+	chineseRestaurants, err := db.FindMany("restaurants", resQuery, objectdb.Options{Limit: 2})
 
 	if err != nil {
 		log.Fatalf("error finding chinese restaurants: %v", err)
@@ -165,8 +168,10 @@ func main() {
 	}
 
 	// Find one employee with the age of 30
-	employee, err := db.FindOne("employees", map[string]interface{}{
-		"age": 30,
+	employee, err := db.FindOne("employees", objectdb.Query{
+		{"AND", []objectdb.Condition{
+			{Path: "age", Operator: "=", Value: 30},
+		}},
 	})
 	if err != nil {
 		log.Fatalf("error finding one employee: %v", err)
@@ -188,4 +193,26 @@ func main() {
 	}
 
 	fmt.Printf("30 years old employee: %v\n", employee)
+
+	// Find employees named John or Jane, whose age is between 20 and 30
+	myQuery := objectdb.Query{
+		{"OR", []objectdb.Condition{
+			{Path: "name", Operator: "=", Value: "Jane"},
+			{Path: "name", Operator: "=", Value: "John"},
+		}},
+		{"AND", []objectdb.Condition{
+			{Path: "age", Operator: ">", Value: 20},
+			{Path: "age", Operator: "<", Value: 40},
+		}},
+	}
+
+	fmt.Println("====================")
+
+	employees, err = db.FindMany("employees", myQuery, objectdb.Options{})
+	if err != nil {
+		log.Fatalf("error finding one employee: %v", err)
+		return
+	}
+
+	fmt.Printf("Employees named John or Jane, whose age is between 20 and 30: %v\n", employees)
 }
