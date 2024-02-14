@@ -292,7 +292,6 @@ func (db *DB) FindMany(collectionName string, query Query, options Options) ([]D
 
 	if !fallbackToFullScan {
 		// Use the index to check
-		fmt.Println("INDEX, NO FULL SCAN")
 
 		allMatchedIdsFromIndex := []string{}
 
@@ -465,7 +464,8 @@ func matchQuery(document Document, query Query) bool {
 
 // matchCondition checks if a document matches a condition.
 func matchCondition(document Document, condition Condition) bool {
-	value, ok := document[condition.Path]
+	value, ok := getValueFromPath(document, condition.Path)
+
 	if !ok {
 		return false
 	}
@@ -529,6 +529,20 @@ func matchCondition(document Document, condition Condition) bool {
 	}
 
 	return false
+}
+
+func getValueFromPath(document map[string]interface{}, path string) (interface{}, bool) {
+	var docSegment any = document
+	for _, part := range strings.Split(path, ".") {
+		switch v := docSegment.(type) {
+		case map[string]interface{}:
+			docSegment = v[part]
+		default:
+			return nil, false
+		}
+	}
+
+	return docSegment, true
 }
 
 // Unmarshal a document into a struct
@@ -688,16 +702,19 @@ func getPathValues(document Document, prefix string) []string {
 	delete(document, "_id")
 
 	for key, value := range document {
+		switch v := value.(type) {
+		case map[string]interface{}:
+			pvs = append(pvs, getPathValues(v, key)...)
+			continue
+		case []interface{}:
+			continue
+		}
+
 		if prefix != "" {
 			key = prefix + "." + key
 		}
 
-		switch v := value.(type) {
-		case Document:
-			pvs = append(pvs, getPathValues(v, key)...)
-		default:
-			pvs = append(pvs, buildPathValue(key, v))
-		}
+		pvs = append(pvs, buildPathValue(key, value))
 	}
 
 	return pvs
@@ -707,8 +724,7 @@ func buildPathValue(path string, value interface{}) string {
 	return fmt.Sprintf("%s=%v", path, value)
 }
 
-// Clear all documents in the store
-// (temporary function for testing)
+// Clear all data in the store and index
 func (db *DB) Clear() error {
 	iter := db.store.NewIter(nil)
 	defer iter.Close()
@@ -732,7 +748,6 @@ func (db *DB) Clear() error {
 }
 
 // Pretty print all the key value pairs in the index
-// (temporary function for testing)
 func (db *DB) PrintIndex() error {
 	iter := db.index.NewIter(nil)
 	defer iter.Close()

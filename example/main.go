@@ -155,7 +155,7 @@ func main() {
 	}
 
 	// Print the chinese restaurants
-	fmt.Println("\nChinese restaurants:")
+	fmt.Println("\n2 Chinese restaurants in 10000:")
 	for index, doc := range chineseRestaurants {
 		restaurant := Restaurant{}
 		err := objectdb.Unmarshal(doc, &restaurant)
@@ -189,10 +189,10 @@ func main() {
 		log.Fatalf("error deleting employee: %v", err)
 		return
 	} else {
-		log.Printf("Deleted employee: %s", employeeId)
+		fmt.Println("\nDeleted employee ID:", employeeId)
 	}
 
-	fmt.Printf("30 years old employee: %v\n", employee)
+	fmt.Printf("\n30 years old employee: %v\n", employee)
 
 	// Find employees named John or Jane, whose age is between 20 and 30
 	myQuery := objectdb.Query{
@@ -206,13 +206,11 @@ func main() {
 		}},
 	}
 
-	fmt.Println("====================")
-
 	employees, err = db.FindMany("employees", myQuery, objectdb.Options{})
 	if err != nil {
 		log.Fatalf("error finding one employee: %v", err)
 		return
 	}
 
-	fmt.Printf("Employees named John or Jane, whose age is between 20 and 30: %v\n", employees)
+	fmt.Printf("\nEmployees named John or Jane, whose age is between 20 and 30: %v\n", employees)
 }
