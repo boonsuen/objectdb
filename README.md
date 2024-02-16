@@ -16,7 +16,7 @@ Internally, ObjectDB uses the [Pebble](https://github.com/cockroachdb/pebble) LS
 
 ObjectDB stores documents in collections. A collection is a set of documents. A database can have multiple collections.
 
-Create a database:
+### Open a Database
 
 ```go
 db, err := objectdb.Open("db")
@@ -26,6 +26,8 @@ if err != nil {
 }
 defer db.Close()
 ```
+
+### Inserting Documents
 
 Collections are created implicitly when a document is inserted into a collection. Each document is identified by a unique UUID, which is added to the document as the `_id` field.
 
