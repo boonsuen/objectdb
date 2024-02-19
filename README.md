@@ -12,6 +12,12 @@ ObjectDB is a document-oriented NoSQL database for Go.
 
 Internally, ObjectDB uses the [Pebble](https://github.com/cockroachdb/pebble) LSM key-value store as its storage engine.
 
+## Installation
+
+```shell
+go get github.com/boonsuen/objectdb
+```
+
 ## Database and Collection
 
 ObjectDB stores documents in collections. A collection is a set of documents. A database can have multiple collections.
@@ -27,7 +33,7 @@ if err != nil {
 defer db.Close()
 ```
 
-### Inserting Documents
+### Insert Documents
 
 Collections are created implicitly when a document is inserted into a collection. Each document is identified by a unique UUID, which is added to the document as the `_id` field.
 
@@ -35,8 +41,8 @@ Insert a document into a collection:
 
 ```go
 type Employee struct {
-	Name string      `json:"name"`
-	Age  json.Number `json:"age"`
+  Name string      `json:"name"`
+  Age  json.Number `json:"age"`
 }
 
 employee := Employee{
@@ -54,13 +60,13 @@ Insert multiple documents into a collection:
 
 ```go
 type Address struct {
-	Postcode string `json:"postcode"`
+  Postcode string `json:"postcode"`
 }
 
 type Restaurant struct {
-	Name    string  `json:"name"`
-	Cuisine string  `json:"cuisine"`
-	Address Address `json:"address"`
+  Name    string  `json:"name"`
+  Cuisine string  `json:"cuisine"`
+  Address Address `json:"address"`
 }
 
 newRestaurants := []Restaurant{
@@ -165,6 +171,16 @@ Query above is equivalent to the following SQL where clause:
 
 ```sql
 WHERE (name = 'John' AND age >= 27) AND (address.city = 'NY' OR address.postcode = '10000')
+```
+
+## Delete Documents
+
+### Delete a Document
+
+To delete a document, use the `DeleteOneById` method.
+
+```go
+err = db.DeleteOneById("collectionName", id)
 ```
 
 ## Indexing
