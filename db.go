@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/boonsuen/objectdb/fts"
 	"github.com/cockroachdb/pebble"
 	"github.com/google/uuid"
 )
@@ -20,6 +21,7 @@ var (
 type DB struct {
 	store *pebble.DB
 	index *pebble.DB
+	fts   *fts.FTS
 }
 
 type Document map[string]interface{}
@@ -107,14 +109,21 @@ const (
 
 // Open opens the underlying storage engine
 func Open(path string) (*DB, error) {
-	db := DB{store: nil, index: nil}
+	db := DB{store: nil, index: nil, fts: nil}
 	var err error
+
 	db.store, err = pebble.Open(path, &pebble.Options{})
 	if err != nil {
 		return nil, err
 	}
 
 	db.index, err = pebble.Open(path+".index", &pebble.Options{})
+	if err != nil {
+		return nil, err
+	}
+
+	db.fts, err = fts.NewFTS(path + ".text_index")
+
 	return &db, err
 }
 
@@ -124,7 +133,16 @@ func (db *DB) Close() error {
 	if err != nil {
 		return err
 	}
-	return db.index.Close()
+	err = db.index.Close()
+	if err != nil {
+		return err
+	}
+	err = db.fts.Close()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 /****************
@@ -157,7 +175,7 @@ func (db *DB) InsertOne(collectionName string, document interface{}) (string, er
 	// Build the key
 	key := getDocumentKey(collectionName, id)
 
-	// Check if the key already exists (use main store for first implementation)
+	// Check if the key already exists
 	value, closer, err := db.store.Get(key)
 	if err != nil && err != pebble.ErrNotFound {
 		return "", err
@@ -176,6 +194,11 @@ func (db *DB) InsertOne(collectionName string, document interface{}) (string, er
 
 	// Add the document to the index
 	if err := db.indexDocument(collectionName, id, documentMap); err != nil {
+		return "", err
+	}
+
+	// Add the document to the full-text search index
+	if err := db.fts.AddToIndex(collectionName, id, document); err != nil {
 		return "", err
 	}
 
@@ -575,6 +598,12 @@ func (db *DB) DeleteOneById(collectionName, id string) error {
 		return err
 	}
 
+	// Delete the document from the full-text search text index
+	err = db.fts.DeleteFromIndex(collectionName, id, document)
+	if err != nil {
+		return err
+	}
+
 	// Delete the document from the store
 	err = db.store.Delete(key, pebble.Sync)
 	if err != nil {
@@ -724,8 +753,32 @@ func buildPathValue(path string, value interface{}) string {
 	return fmt.Sprintf("%s=%v", path, value)
 }
 
+/****************
+ * Full-text search
+****************/
+
+func (db *DB) Search(collectionName, text string) ([]Document, error) {
+	documentIds, err := db.fts.Search(collectionName, text)
+	if err != nil {
+		return nil, err
+	}
+
+	var documents []Document
+	for _, id := range documentIds {
+		document, err := db.FindOneById(collectionName, id)
+		if err != nil {
+			return nil, err
+		}
+
+		documents = append(documents, document)
+	}
+
+	return documents, nil
+}
+
 // Clear all data in the store and index
 func (db *DB) Clear() error {
+	// Clear the store
 	iter := db.store.NewIter(nil)
 	defer iter.Close()
 
@@ -735,6 +788,7 @@ func (db *DB) Clear() error {
 		}
 	}
 
+	// Clear the index
 	iter = db.index.NewIter(nil)
 	defer iter.Close()
 
@@ -742,6 +796,11 @@ func (db *DB) Clear() error {
 		if err := db.index.Delete(iter.Key(), pebble.Sync); err != nil {
 			return err
 		}
+	}
+
+	// Clear the full-text search index
+	if err := db.fts.Clear(); err != nil {
+		return err
 	}
 
 	return nil

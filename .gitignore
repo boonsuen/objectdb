@@ -1,5 +1,6 @@
 /db
 /db.index
+/db.text_index
 /example/db
 /example/db.index
 

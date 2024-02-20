@@ -186,3 +186,22 @@ err = db.DeleteOneById("collectionName", id)
 ## Indexing
 
 ObjectDB keep tracks of the path-value pairs of the documents in a index. This allows for efficient querying of documents for certain queries. A search will fall back to a full collection scan when it is not possible to solely rely on the index to satisfy the query.
+
+## Full-Text Search
+
+Aside from querying using the Find methods, ObjectDB also supports full-text search that scales well with large collections.
+
+To allow full-text search on a field, annotate the field with the `textIndex` tag. It will be indexed and its text content can be searched in a full-text search query. Note that the field must be of string type.
+
+```go
+type Restaurant struct {
+  Name    string  `json:"name" objectdb:"textIndex"`
+  Cuisine string  `json:"cuisine" objectdb:"textIndex"`
+}
+```
+
+To perform a full-text search, use the `Search` method.
+
+```go
+documents, err := db.Search("collectionName", "search query")
+```
