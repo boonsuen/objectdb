@@ -1,5 +1,9 @@
 # ObjectDB
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/boonsuen/objectdb.svg)](https://pkg.go.dev/github.com/boonsuen/objectdb)
+[![Go Report Card](https://goreportcard.com/badge/github.com/boonsuen/objectdb)](https://goreportcard.com/report/github.com/boonsuen/objectdb)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 ObjectDB is a document-oriented NoSQL database for Go.
 
 ## Features
